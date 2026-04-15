@@ -1,8 +1,10 @@
-# rtfm
+# rtfm (Read The F***ing Manual)
 
-Local CLI tool for command-line help via [Ollama](https://ollama.com). Ask a question in plain English, get just the command back. No paid APIs, no internet required.
+For when you *could* read the manual... but you'd rather not.
 
-Inspired by [how2](https://github.com/santinic/how2).
+Local CLI tool for command-line help via [Ollama](https://ollama.com). Ask a question in plain English, get just the command back. No paid APIs, no internet, no judgment.
+
+Inspired by [how2](https://github.com/santinic/how2) — but fully local, because your dumb questions deserve privacy.
 
 ## Demo
 

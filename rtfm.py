@@ -5,15 +5,23 @@ import http.client
 import json
 import sys
 
-SYSTEM = (
+SYSTEM_CMD = (
     "Reply with ONLY the shell command(s) that answer the question. "
     "No explanation, no preamble, no markdown, no code fences. "
     "Just the raw command(s), one per line."
 )
 
+SYSTEM_QNA = (
+    "You are a helpful terminal assistant. "
+    "Answer the user's question concisely and clearly. "
+    "Use plain text. Do not use markdown or code fences."
+)
+
 
 def main():
-    parser = argparse.ArgumentParser(usage="rtfm <question>")
+    parser = argparse.ArgumentParser(usage="rtfm [-q] <question>")
+    parser.add_argument("-q", action="store_true",
+                        help="ask a general question instead of getting a command")
     parser.add_argument("query", nargs="*")
     args = parser.parse_args()
 
@@ -21,10 +29,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    system = SYSTEM_QNA if args.q else SYSTEM_CMD
+
     body = json.dumps({
         "model": "qwen3.5:27b",
         "messages": [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": " ".join(args.query)},
         ],
         "stream": True,

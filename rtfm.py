@@ -17,11 +17,20 @@ SYSTEM_QNA = (
     "Use plain text. Do not use markdown or code fences."
 )
 
+SYSTEM_EXPLAIN = (
+    "Explain the given shell command in plain English. "
+    "Break down each part (flags, arguments, pipes, redirects, etc.) concisely. "
+    "Use plain text. Do not use markdown or code fences."
+)
+
 
 def main():
-    parser = argparse.ArgumentParser(usage="rtfm [-q] <question>")
-    parser.add_argument("-q", action="store_true",
-                        help="ask a general question instead of getting a command")
+    parser = argparse.ArgumentParser(usage="rtfm [-q | -e] <question>")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("-q", action="store_true",
+                      help="ask a general question instead of getting a command")
+    mode.add_argument("-e", action="store_true",
+                      help="explain a command")
     parser.add_argument("query", nargs="*")
     args = parser.parse_args()
 
@@ -29,7 +38,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    system = SYSTEM_QNA if args.q else SYSTEM_CMD
+    if args.e:
+        system = SYSTEM_EXPLAIN
+    elif args.q:
+        system = SYSTEM_QNA
+    else:
+        system = SYSTEM_CMD
 
     body = json.dumps({
         "model": "qwen3.5:27b",

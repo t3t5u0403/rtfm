@@ -1,4 +1,11 @@
-"""rtfm — local CLI tool for command-line help via Ollama."""
+"""rtdm CLI entry point.
+
+Phase 7b transitional shim: this is the original single-file rtfm CLI,
+relocated to ``src/rtdm/main.py`` so the package layout matches what
+``pipx`` expects.  Subsequent commits in Phase 7b split this file into
+``config``, ``backends.local``, ``backends.remote``, and a thin
+dispatcher.  Until then it talks to local Ollama exactly as before.
+"""
 
 import argparse
 import http.client

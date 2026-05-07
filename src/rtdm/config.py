@@ -20,6 +20,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
@@ -123,3 +124,88 @@ def load_config(path: Path | None = None) -> Config:
         mode = env_mode
 
     return Config(mode=mode, remote=remote, local=local, source=source)
+
+
+def update_api_key(new_key: str, path: Path | None = None) -> Path:
+    """Atomically rewrite the config file with a new ``[remote] api_key``.
+
+    Used by ``rtdm rotate`` to persist the post-rotation key.  We can't
+    afford a half-written config here — losing the file mid-write
+    would leave the user without their *new* key (the old one is
+    already revoked server-side).
+
+    Strategy: write to a sibling temp file in the same directory,
+    fsync, rename over the destination, then chmod 600.  os.replace is
+    atomic on POSIX and on Windows.
+
+    All other fields are preserved by re-reading the on-disk values
+    (or falling back to defaults if the file doesn't exist yet) and
+    re-rendering the document.  This avoids depending on a TOML writer.
+
+    Returns the absolute path that was written, for the caller to
+    surface in a success message.
+    """
+    cfg_path = path if path is not None else default_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = load_config(cfg_path)
+    body = _render_remote_focused_toml(
+        mode=existing.mode if existing.source is not None else "remote",
+        api_key=new_key,
+        endpoint=existing.remote.endpoint,
+        ollama_url=existing.local.ollama_url,
+        model=existing.local.model,
+    )
+
+    tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(body)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, cfg_path)
+    try:
+        cfg_path.chmod(0o600)
+    except OSError:
+        # Non-POSIX FS (e.g. some Windows mounts); best-effort.
+        pass
+    return cfg_path
+
+
+def _toml_escape(value: str) -> str:
+    """Quote a string for emission as a TOML basic string literal."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _render_remote_focused_toml(
+    *,
+    mode: str,
+    api_key: str,
+    endpoint: str,
+    ollama_url: str,
+    model: str,
+) -> str:
+    """Render a config TOML preserving everything except api_key.
+
+    Mirrors the layout that ``rtdm config init`` produces, so the file
+    keeps looking the same after a rotation.  We accept the duplication
+    with config_cli._render_toml because the bodies are tiny and a
+    shared helper would couple two modules that don't otherwise need
+    to know about each other.
+    """
+    s = _toml_escape
+    lines: Iterable[str] = (
+        "# rtdm config — written by `rtdm rotate` (api_key updated).",
+        "# Edit by hand if you prefer; see `rtdm config show` for the effective values.",
+        "",
+        f"mode = {s(mode)}",
+        "",
+        "[remote]",
+        f"api_key = {s(api_key)}",
+        f"endpoint = {s(endpoint)}",
+        "",
+        "[local]",
+        f"ollama_url = {s(ollama_url)}",
+        f"model = {s(model)}",
+        "",
+    )
+    return "\n".join(lines)

@@ -57,6 +57,18 @@ quoting.
 | `-c` | Copy the output to the clipboard                               |
 | `-x` | Execute the returned command (cmd mode only, with confirmation)|
 
+### Subcommands
+
+Account self-service for hosted-mode users. All require remote mode
+(except `whoami`, which works in either mode).
+
+| Subcommand     | Effect                                                          |
+|----------------|-----------------------------------------------------------------|
+| `rtdm portal`  | Open the Stripe billing portal (manage subscription, invoices)  |
+| `rtdm rotate`  | Issue a new API key, revoke the old one, update local config    |
+| `rtdm usage`   | Show this month's usage and remaining quota                     |
+| `rtdm whoami`  | Show which key/host this CLI is configured against (no network) |
+
 ### Examples
 
 ```

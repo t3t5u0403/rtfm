@@ -76,3 +76,14 @@ faster but worse at obscure commands; larger models (e.g.
 
 If a model produces output with markdown fences or commentary despite
 the system prompt, switch to one trained more on instruction-following.
+
+## Account subcommands in local mode
+
+The `rtdm portal`, `rtdm rotate`, and `rtdm usage` subcommands are
+hosted-mode features (they all hit `rtdm.sh`). In local mode they
+print a one-line "remote mode only" message and exit 1 — there's no
+subscription to manage, no key to rotate, and no quota to count
+against.
+
+`rtdm whoami` works fine in local mode and shows your Ollama URL and
+model instead of a remote endpoint.

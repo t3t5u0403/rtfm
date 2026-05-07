@@ -1,138 +1,183 @@
-"""rtdm CLI entry point.
+"""rtdm CLI dispatcher.
 
-Phase 7b transitional shim: this is the original single-file rtfm CLI,
-relocated to ``src/rtdm/main.py`` so the package layout matches what
-``pipx`` expects.  Subsequent commits in Phase 7b split this file into
-``config``, ``backends.local``, ``backends.remote``, and a thin
-dispatcher.  Until then it talks to local Ollama exactly as before.
+Reads config (file + env override), parses argv, picks a backend, and
+runs the requested task.  Three task shapes — cmd (default), ``-q``
+question, ``-e`` explain — map onto the three backend functions
+exposed by both ``backends.local`` and ``backends.remote``.
+
+The ``-c`` (clipboard) and ``-x`` (execute) flags live here rather
+than in the backends because they're side effects on the *user's*
+machine; whether the text came from local Ollama or a hosted call
+makes no difference to how it should be copied or run.
+
+Note on ``-x``: by spec, it's only valid in cmd mode.  Asking the
+shell to run a paragraph of natural-language explanation is a foot-gun
+we'd rather refuse outright than try to be clever about.
 """
 
+from __future__ import annotations
+
 import argparse
-import http.client
-import json
-import shutil
-import subprocess
 import sys
 
-SYSTEM_CMD = (
-    "Reply with ONLY the shell command(s) that answer the question. "
-    "No explanation, no preamble, no markdown, no code fences. "
-    "Just the raw command(s), one per line."
-)
-
-SYSTEM_QNA = (
-    "You are a helpful terminal assistant. "
-    "Answer the user's question concisely and clearly. "
-    "Use plain text. Do not use markdown or code fences."
-)
-
-SYSTEM_EXPLAIN = (
-    "Explain the given shell command in plain English. "
-    "Break down each part (flags, arguments, pipes, redirects, etc.) concisely. "
-    "Use plain text. Do not use markdown or code fences."
-)
+from rtdm import config as config_module
+from rtdm.backends import local as local_backend
+from rtdm.backends import remote as remote_backend
+from rtdm.config import Config
 
 
-def copy_to_clipboard(text):
-    """Copy text to system clipboard."""
-    if shutil.which("wl-copy"):
-        cmd = ["wl-copy"]
-    elif shutil.which("xclip"):
-        cmd = ["xclip", "-selection", "clipboard"]
-    elif shutil.which("xsel"):
-        cmd = ["xsel", "--clipboard", "--input"]
-    else:
-        print("No clipboard tool found (install wl-copy, xclip, or xsel)",
-              file=sys.stderr)
-        return False
-    subprocess.run(cmd, input=text.encode(), check=True)
-    return True
+def _build_config_parser() -> argparse.ArgumentParser:
+    """Subparser used only when argv[0] == 'config'."""
+    parser = argparse.ArgumentParser(
+        prog="rtdm config",
+        description="Interactive setup, inspect current config, or print its path.",
+    )
+    parser.add_argument(
+        "action",
+        choices=("init", "show", "path"),
+        help="init: interactive setup; show: print effective config; path: print config file location",
+    )
+    return parser
 
 
-def stream_response(resp):
-    """Stream tokens from Ollama, print live, and return full output."""
-    chunks = []
-    while True:
-        line = resp.readline()
-        if not line:
-            break
-        chunk = json.loads(line)
-        if chunk.get("done"):
-            break
-        tok = chunk.get("message", {}).get("content", "")
-        if tok:
-            print(tok, end="", flush=True)
-            chunks.append(tok)
-    print()
-    return "".join(chunks)
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the main argparse tree.
 
+    Argparse subparsers don't compose with a free-form ``nargs="*"``
+    positional (the first word always wins as a subcommand name), so
+    we keep the cmd/-q/-e parser self-contained and route ``config``
+    via :func:`_build_config_parser` from :func:`main` before parsing.
+    """
+    parser = argparse.ArgumentParser(
+        prog="rtdm",
+        description="An AI shell helper that gives you the command without the commentary.",
+        usage="rtdm [-q | -e] [-c] [-x] <query...>   |   rtdm config <init|show|path>",
+    )
 
-def main():
-    parser = argparse.ArgumentParser(usage="rtfm [-q | -e] [-c] [-x] <question>")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("-q", action="store_true",
-                      help="ask a general question instead of getting a command")
-    mode.add_argument("-e", action="store_true",
-                      help="explain a command")
-    parser.add_argument("-c", action="store_true",
-                        help="copy the output to clipboard")
-    parser.add_argument("-x", action="store_true",
-                        help="execute the returned command (with confirmation)")
-    parser.add_argument("query", nargs="*")
-    args = parser.parse_args()
+    mode.add_argument(
+        "-q",
+        action="store_true",
+        help="ask a general terminal question instead of getting a command",
+    )
+    mode.add_argument(
+        "-e",
+        action="store_true",
+        help="explain a shell command",
+    )
+    parser.add_argument(
+        "-c",
+        action="store_true",
+        help="copy the output to clipboard",
+    )
+    parser.add_argument(
+        "-x",
+        action="store_true",
+        help="execute the returned command (cmd mode only, with confirmation)",
+    )
+    parser.add_argument(
+        "query",
+        nargs="*",
+        help="natural-language query; multi-word, no quotes needed",
+    )
+    return parser
+
+
+def _resolve_task(args: argparse.Namespace) -> str:
+    """Translate the ``-q``/``-e`` flags into a task tag."""
+    if args.q:
+        return "ask"
+    if args.e:
+        return "explain"
+    return "query"
+
+
+def _dispatch(task: str, user_input: str, cfg: Config) -> str:
+    """Run ``task`` against the configured backend, returning the model output.
+
+    Local mode raises :class:`local_backend.LocalBackendError`; remote
+    mode raises :class:`remote_backend.RemoteBackendError`.  Both are
+    caught at the CLI top level and printed as a single line to stderr.
+    """
+    if cfg.mode == "remote":
+        if not cfg.remote.api_key:
+            raise remote_backend.RemoteBackendError(
+                "remote mode is enabled but api_key is missing.\n"
+                "edit ~/.config/rtdm/config.toml or run 'rtdm config init' to set up."
+            )
+        fn = getattr(remote_backend, task)
+        return fn(user_input, cfg.remote.api_key, cfg.remote.endpoint)
+
+    fn = getattr(local_backend, task)
+    return fn(user_input, cfg.local)
+
+
+def _run_config_subcommand(action: str) -> int:
+    """Hand off to the (lazily imported) config CLI module."""
+    from rtdm import config_cli
+
+    if action == "init":
+        return config_cli.run_init()
+    if action == "show":
+        return config_cli.run_show()
+    if action == "path":
+        return config_cli.run_path()
+    return 2  # unreachable thanks to argparse choices=, but keeps mypy happy
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point — wired into pyproject.toml as the ``rtdm`` script."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+
+    # Hand off the config subcommand before the main parser sees argv.
+    # Otherwise an argparse subparser would steal "config" as a literal
+    # query word ("rtdm config the system" would fail).
+    if raw and raw[0] == "config":
+        cfg_args = _build_config_parser().parse_args(raw[1:])
+        return _run_config_subcommand(cfg_args.action)
+
+    parser = _build_parser()
+    args = parser.parse_args(raw)
 
     if not args.query:
         parser.print_help()
-        sys.exit(1)
+        return 1
 
     if args.x and (args.q or args.e):
-        print("Error: -x can only be used in command mode (not with -q or -e)",
-              file=sys.stderr)
-        sys.exit(1)
+        print(
+            "rtdm: -x can only be used in command mode (not with -q or -e)",
+            file=sys.stderr,
+        )
+        return 1
 
-    if args.e:
-        system = SYSTEM_EXPLAIN
-    elif args.q:
-        system = SYSTEM_QNA
-    else:
-        system = SYSTEM_CMD
-
-    body = json.dumps({
-        "model": "qwen3.5:27b",
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": " ".join(args.query)},
-        ],
-        "stream": True,
-        "think": False,
-        "options": {"num_ctx": 2048},
-    }).encode()
+    cfg = config_module.load_config()
+    task = _resolve_task(args)
+    user_input = " ".join(args.query)
 
     try:
-        conn = http.client.HTTPConnection("localhost", 11434)
-        conn.request("POST", "/api/chat", body=body,
-                     headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        output = stream_response(resp)
-        conn.close()
-    except (ConnectionRefusedError, OSError):
-        print("Could not connect to Ollama. Is it running? (`ollama serve`)",
-              file=sys.stderr)
-        sys.exit(1)
+        output = _dispatch(task, user_input, cfg)
+    except local_backend.LocalBackendError as exc:
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
+    except remote_backend.RemoteBackendError as exc:
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
+
+    # Remote backends return without having printed anything; surface
+    # the response to the user.  Local backends already streamed the
+    # text live, so we'd just be double-printing.
+    if cfg.mode == "remote":
+        print(output)
 
     if args.c:
-        if copy_to_clipboard(output):
+        if local_backend.copy_to_clipboard(output):
             print("(copied to clipboard)", file=sys.stderr)
 
     if args.x:
-        try:
-            answer = input("Run? [y/N] ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            print()
-            sys.exit(0)
-        if answer == "y":
-            subprocess.run(output, shell=True)
+        local_backend.confirm_and_execute(output)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

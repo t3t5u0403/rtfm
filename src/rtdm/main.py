@@ -51,7 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rtdm",
         description="An AI shell helper that gives you the command without the commentary.",
-        usage="rtdm [-q | -e] [-c] [-x] <query...>   |   rtdm config <init|show|path>",
+        usage=(
+            "rtdm [-q | -e] [-c] [-x] <query...>"
+            "   |   rtdm config <init|show|path>"
+            "   |   rtdm <portal|rotate|usage|whoami>"
+        ),
     )
 
     mode = parser.add_mutually_exclusive_group()
@@ -125,6 +129,39 @@ def _run_config_subcommand(action: str) -> int:
     return 2  # unreachable thanks to argparse choices=, but keeps mypy happy
 
 
+# Account-management subcommands.  Each maps to a module loaded lazily
+# below so a normal "rtdm <query>" invocation never imports webbrowser,
+# tomli-w shims, etc.  Keep this tuple in sync with the README's
+# Subcommands table.
+_ACCOUNT_SUBCOMMANDS = ("portal", "rotate", "usage", "whoami")
+
+
+def _run_account_subcommand(name: str, rest: list[str]) -> int:
+    """Dispatch one of the account subcommands.
+
+    Each handler accepts no positional args (we accept ``rest`` only so
+    we can reject extra junk with a clean message instead of argparse's
+    "unrecognised arguments" splat).
+    """
+    if rest:
+        print(f"rtdm: '{name}' takes no arguments", file=sys.stderr)
+        return 1
+
+    if name == "portal":
+        from rtdm import portal_cli
+        return portal_cli.run()
+    if name == "rotate":
+        from rtdm import rotate_cli
+        return rotate_cli.run()
+    if name == "usage":
+        from rtdm import usage_cli
+        return usage_cli.run()
+    if name == "whoami":
+        from rtdm import whoami_cli
+        return whoami_cli.run()
+    return 2  # unreachable; gated by the membership check in main()
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point — wired into pyproject.toml as the ``rtdm`` script."""
     raw = list(sys.argv[1:] if argv is None else argv)
@@ -135,6 +172,13 @@ def main(argv: list[str] | None = None) -> int:
     if raw and raw[0] == "config":
         cfg_args = _build_config_parser().parse_args(raw[1:])
         return _run_config_subcommand(cfg_args.action)
+
+    # Same dance for the account subcommands.  Same trade-off: a query
+    # whose first word is "portal" or "usage" must be quoted ("rtdm
+    # 'portal access on linux'") — but those collisions are rare enough
+    # that the readability of `rtdm portal` wins.
+    if raw and raw[0] in _ACCOUNT_SUBCOMMANDS:
+        return _run_account_subcommand(raw[0], raw[1:])
 
     parser = _build_parser()
     args = parser.parse_args(raw)

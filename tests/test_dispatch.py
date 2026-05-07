@@ -108,6 +108,35 @@ def test_no_query_prints_help(capsys):
     assert "usage:" in out.lower()
 
 
+@pytest.mark.parametrize(
+    "name, module_path",
+    [
+        ("portal", "rtdm.portal_cli"),
+        ("rotate", "rtdm.rotate_cli"),
+        ("usage", "rtdm.usage_cli"),
+        ("whoami", "rtdm.whoami_cli"),
+    ],
+)
+def test_account_subcommand_dispatches(monkeypatch, name, module_path):
+    """Each account subcommand routes to its lazy-loaded handler.
+
+    We patch the underlying module's ``run`` so we can assert it was
+    called without actually firing real network/IO.
+    """
+    with patch(f"{module_path}.run", return_value=0) as mock_run:
+        rc = rtdm_main.main([name])
+    assert rc == 0
+    mock_run.assert_called_once()
+
+
+def test_account_subcommand_rejects_extra_args(capsys):
+    """Account subcommands take no args; trailing junk is a hard error."""
+    rc = rtdm_main.main(["portal", "extra"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no arguments" in err
+
+
 def test_env_var_override_works(monkeypatch, tmp_path):
     """RTDM_MODE flips the dispatch path even if config says otherwise.
 

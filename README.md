@@ -39,11 +39,16 @@ rtdm "find files over 100mb"   # also works
 ```
 
 The exception is when your input contains characters the shell would
-interpret (dashes, semicolons, glob characters); quote those:
+interpret — globs (`*`, `?`, `[]`), control operators (`;`, `|`, `&`,
+`<`, `>`), or arguments that look like flags (e.g. `--recursive`).
+Quote those:
 
 ```
 rtdm -e "find . -mtime -7 -exec rm {} \;"
 ```
+
+Plain dashes are fine; `rtdm find files -size 100mb` works without
+quoting.
 
 ### Flags
 
@@ -137,4 +142,4 @@ uv run pytest
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

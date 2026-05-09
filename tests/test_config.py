@@ -39,7 +39,7 @@ def test_load_config_reads_toml_correctly(tmp_path, monkeypatch):
             mode = "remote"
 
             [remote]
-            api_key = "rtdm_live_abc"
+            api_key = "rtdm_live_abcdefghijklmnopqrstuvwxyz012345"
             endpoint = "https://example.invalid"
 
             [local]
@@ -51,7 +51,7 @@ def test_load_config_reads_toml_correctly(tmp_path, monkeypatch):
     cfg = load_config(p)
 
     assert cfg.mode == "remote"
-    assert cfg.remote.api_key == "rtdm_live_abc"
+    assert cfg.remote.api_key == "rtdm_live_abcdefghijklmnopqrstuvwxyz012345"
     assert cfg.remote.endpoint == "https://example.invalid"
     assert cfg.local.ollama_url == "http://10.0.0.5:11434"
     assert cfg.local.model == "custom-model"
@@ -99,7 +99,10 @@ def test_invalid_mode_falls_back_to_local(tmp_path, monkeypatch):
 def test_unknown_env_mode_ignored(tmp_path, monkeypatch):
     """RTDM_MODE=garbage is silently ignored; the file's mode stands."""
     p = tmp_path / "config.toml"
-    p.write_text('mode = "remote"\n[remote]\napi_key = "x"\n')
+    p.write_text(
+        'mode = "remote"\n[remote]\n'
+        'api_key = "rtdm_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\n'
+    )
     monkeypatch.setenv("RTDM_MODE", "loopback")
     cfg = load_config(p)
     assert cfg.mode == "remote"
@@ -109,3 +112,30 @@ def test_default_path_honours_xdg(monkeypatch, tmp_path):
     """default_config_path uses XDG_CONFIG_HOME when set."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert config_module.default_config_path() == tmp_path / "rtdm" / "config.toml"
+
+
+def test_load_config_rejects_corrupted_api_key(tmp_path, monkeypatch):
+    """An api_key that doesn't match the canonical shape raises a clear error.
+
+    Defence in depth: even if the file is hand-edited or a byte gets
+    flipped on disk, the next CLI invocation refuses to use the key
+    instead of producing an opaque httpx encoding traceback later.
+    """
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "corrupt.toml"
+    p.write_text(
+        'mode = "remote"\n[remote]\napi_key = "rtdm_live_too_short"\n'
+    )
+    with pytest.raises(ValueError, match="Invalid api_key in config"):
+        load_config(p)
+
+
+def test_load_config_accepts_valid_key(tmp_path, monkeypatch):
+    """A canonical 42-char ``rtdm_live_<32 chars>`` key loads cleanly."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    valid = "rtdm_live_" + "z" * 32
+    p = tmp_path / "valid.toml"
+    p.write_text(f'mode = "remote"\n[remote]\napi_key = "{valid}"\n')
+
+    cfg = load_config(p)
+    assert cfg.remote.api_key == valid

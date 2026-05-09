@@ -226,15 +226,18 @@ def test_update_api_key_writes_new_key(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text(
         'mode = "remote"\n'
-        '[remote]\napi_key = "rtdm_live_old"\nendpoint = "https://example.com"\n'
+        '[remote]\n'
+        'api_key = "rtdm_live_oooooooooooooooooooooooooooooooo"\n'
+        'endpoint = "https://example.com"\n'
         '[local]\nollama_url = "http://x:1"\nmodel = "custom-model"\n'
     )
 
-    out = config_module.update_api_key("rtdm_live_new_xxxxxxxxxx", path=p)
+    new_key = "rtdm_live_nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+    out = config_module.update_api_key(new_key, path=p)
 
     assert out == p
     cfg = config_module.load_config(p)
-    assert cfg.remote.api_key == "rtdm_live_new_xxxxxxxxxx"
+    assert cfg.remote.api_key == new_key
     # Other fields preserved.
     assert cfg.remote.endpoint == "https://example.com"
     assert cfg.local.ollama_url == "http://x:1"
@@ -244,10 +247,15 @@ def test_update_api_key_writes_new_key(tmp_path):
 def test_update_api_key_uses_atomic_replace(tmp_path):
     """The actual write goes via os.replace (so a crash mid-write doesn't truncate)."""
     p = tmp_path / "config.toml"
-    p.write_text('mode = "remote"\n[remote]\napi_key = "old"\n')
+    p.write_text(
+        'mode = "remote"\n[remote]\n'
+        'api_key = "rtdm_live_oooooooooooooooooooooooooooooooo"\n'
+    )
 
     with patch("rtdm.config.os.replace") as mock_replace:
-        config_module.update_api_key("rtdm_live_new_yyyyyyyyyy", path=p)
+        config_module.update_api_key(
+            "rtdm_live_nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn", path=p
+        )
 
     mock_replace.assert_called_once()
     args = mock_replace.call_args.args

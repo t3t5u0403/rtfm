@@ -17,6 +17,7 @@ runs once per invocation and we don't want startup overhead.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,19 @@ DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
 DEFAULT_REMOTE_ENDPOINT = "https://rtdm.sh"
 
 VALID_MODES = ("local", "remote")
+
+# Canonical rtdm API key shape: ``rtdm_live_`` plus exactly 32 URL-safe
+# base64 characters (the alphabet produced by ``secrets.token_urlsafe(24)``
+# server-side).  Validating at the config boundary is defence in depth:
+# even if the file is hand-edited or the disk corrupts a byte, the next
+# CLI invocation refuses to use the key instead of crashing inside httpx
+# with an opaque encoding error.
+_API_KEY_PATTERN = re.compile(r"^rtdm_live_[A-Za-z0-9_-]{32}$")
+
+
+def is_valid_api_key(value: object) -> bool:
+    """Return True iff ``value`` is a string matching the canonical key shape."""
+    return isinstance(value, str) and _API_KEY_PATTERN.match(value) is not None
 
 
 def default_config_path() -> Path:
@@ -100,6 +114,13 @@ def load_config(path: Path | None = None) -> Config:
     if not isinstance(remote_section, dict):
         remote_section = {}
     api_key = remote_section.get("api_key")
+    # A key that's present but doesn't match the canonical shape is a
+    # corrupted config; raise here so the user sees a clean message
+    # instead of a downstream httpx encoding traceback.
+    if isinstance(api_key, str) and api_key and not is_valid_api_key(api_key):
+        raise ValueError(
+            "Invalid api_key in config. Run `rtdm config init` to re-enter."
+        )
     endpoint = remote_section.get("endpoint") or DEFAULT_REMOTE_ENDPOINT
     remote = RemoteConfig(
         api_key=api_key if isinstance(api_key, str) and api_key else None,

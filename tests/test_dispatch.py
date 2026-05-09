@@ -145,7 +145,10 @@ def test_env_var_override_works(monkeypatch, tmp_path):
     (it shouldn't — the override lives in config.load_config).
     """
     p = tmp_path / "cfg.toml"
-    p.write_text('mode = "local"\n[remote]\napi_key = "x"\n')
+    p.write_text(
+        'mode = "local"\n[remote]\n'
+        'api_key = "rtdm_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\n'
+    )
     monkeypatch.setenv("RTDM_MODE", "remote")
 
     # Stub default_config_path so load_config reads our temp file.

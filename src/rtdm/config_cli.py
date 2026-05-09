@@ -28,7 +28,14 @@ from rtdm.config import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_REMOTE_ENDPOINT,
     default_config_path,
+    is_valid_api_key,
     load_config,
+)
+
+_MAX_KEY_ATTEMPTS = 3
+_KEY_FORMAT_ERROR = (
+    "API key looks invalid. Expected format: "
+    "rtdm_live_<32 alphanumeric/dash/underscore chars>. Try again."
 )
 
 
@@ -104,10 +111,28 @@ def run_init() -> int:
 
     if mode == "remote":
         # getpass hides the input entirely; the prompt asks for it
-        # explicitly so the user knows nothing's broken.
-        api_key = getpass.getpass("API key (input hidden): ").strip()
-        if not api_key:
-            print("rtdm: API key cannot be empty for remote mode.", file=sys.stderr)
+        # explicitly so the user knows nothing's broken.  We also
+        # validate the format and re-prompt so a fat-fingered paste
+        # doesn't get persisted to disk in a shape the loader will
+        # later refuse.
+        api_key = ""
+        for _ in range(_MAX_KEY_ATTEMPTS):
+            candidate = getpass.getpass("API key (input hidden): ").strip()
+            if not candidate:
+                print(
+                    "rtdm: API key cannot be empty for remote mode.",
+                    file=sys.stderr,
+                )
+                return 1
+            if is_valid_api_key(candidate):
+                api_key = candidate
+                break
+            print(_KEY_FORMAT_ERROR, file=sys.stderr)
+        else:
+            print(
+                "rtdm: too many invalid attempts; aborting.",
+                file=sys.stderr,
+            )
             return 1
         endpoint = _ask("endpoint", DEFAULT_REMOTE_ENDPOINT)
         ollama_url = DEFAULT_OLLAMA_URL

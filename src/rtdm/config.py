@@ -22,6 +22,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlsplit
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
@@ -41,6 +42,57 @@ _API_KEY_PATTERN = re.compile(r"^rtdm_live_[A-Za-z0-9_-]{32}$")
 def is_valid_api_key(value: object) -> bool:
     """Return True iff ``value`` is a string matching the canonical key shape."""
     return isinstance(value, str) and _API_KEY_PATTERN.match(value) is not None
+
+
+# Hostnames where plain http:// is acceptable — strictly local loopback.
+# Anything else over http:// would ship a bearer token in cleartext.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_valid_endpoint(value: object) -> bool:
+    """Return True iff ``value`` is a safe rtdm endpoint URL.
+
+    Rules:
+    * Must be a string.
+    * Scheme must be ``https``, OR ``http`` with a loopback host
+      (``localhost``, ``127.0.0.1``, ``::1``) for self-hosted dev.
+    * Must have a hostname.
+    * Must not carry a non-trivial path, query, or fragment — the
+      backend appends ``/v1/...`` itself, and a stray ``?token=...``
+      on the configured endpoint would silently leak with every
+      request.
+
+    Defence-in-depth: prevents a hand-edited or copy-pasted
+    ``http://rtdm.sh`` from shipping a bearer token in cleartext over
+    a captive-portal Wi-Fi link.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    if not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    if parts.scheme == "https":
+        pass
+    elif parts.scheme == "http" and host in _LOCAL_HOSTS:
+        pass
+    else:
+        return False
+    # A path of "" or "/" is fine; anything else means the user has
+    # baked routing into the endpoint and the backend's "/v1/..." join
+    # will produce something unintended.
+    if parts.path not in ("", "/"):
+        return False
+    if parts.query or parts.fragment:
+        return False
+    # Reject embedded credentials (``https://user:pass@host``); they'd
+    # fight with the Bearer header and confuse logs.
+    if parts.username or parts.password:
+        return False
+    return True
 
 
 def default_config_path() -> Path:
@@ -122,9 +174,20 @@ def load_config(path: Path | None = None) -> Config:
             "Invalid api_key in config. Run `rtdm config init` to re-enter."
         )
     endpoint = remote_section.get("endpoint") or DEFAULT_REMOTE_ENDPOINT
+    if not isinstance(endpoint, str):
+        endpoint = DEFAULT_REMOTE_ENDPOINT
+    # An http:// endpoint (other than loopback) would leak the bearer
+    # token in cleartext.  Refuse to load such a config rather than
+    # silently downgrading the user's transport security.
+    if not is_valid_endpoint(endpoint):
+        raise ValueError(
+            f"Invalid endpoint in config: {endpoint!r}. "
+            "Must be https://, or http:// with a loopback host. "
+            "Run `rtdm config init` to fix."
+        )
     remote = RemoteConfig(
         api_key=api_key if isinstance(api_key, str) and api_key else None,
-        endpoint=endpoint if isinstance(endpoint, str) else DEFAULT_REMOTE_ENDPOINT,
+        endpoint=endpoint,
     )
 
     local_section = raw.get("local") or {}

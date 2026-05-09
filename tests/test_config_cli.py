@@ -80,3 +80,44 @@ def test_config_init_rejects_duplicated_key(tmp_path, monkeypatch, capsys):
     assert mock_pw.call_count == 3
     assert "API key looks invalid" in capsys.readouterr().err
     assert not target.exists()
+
+
+def test_config_init_rejects_http_endpoint(tmp_path, monkeypatch, capsys):
+    """A non-loopback http:// endpoint must be re-prompted, then aborted.
+
+    The wizard must refuse to persist an endpoint that would ship the
+    bearer token in cleartext over the wire (audit #2).
+    """
+    target = _point_config_at(tmp_path, monkeypatch)
+
+    valid_key = "rtdm_live_" + "y" * 32
+    # Driven inputs:  mode prompt -> "remote", then three endpoint attempts
+    # that all fail (http://rtdm.sh is non-loopback, must be rejected).
+    inputs = iter(["remote", "http://rtdm.sh", "http://rtdm.sh", "http://rtdm.sh"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+
+    with patch("getpass.getpass", return_value=valid_key):
+        rc = config_cli.run_init()
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "Endpoint looks invalid" in err
+    assert "too many invalid endpoint attempts" in err
+    assert not target.exists()
+
+
+def test_config_init_accepts_https_endpoint(tmp_path, monkeypatch, capsys):
+    """A normal https:// endpoint passes validation and the config is written."""
+    target = _point_config_at(tmp_path, monkeypatch)
+
+    valid_key = "rtdm_live_" + "y" * 32
+    inputs = iter(["remote", "https://rtdm.sh"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+
+    with patch("getpass.getpass", return_value=valid_key):
+        rc = config_cli.run_init()
+
+    assert rc == 0
+    assert target.exists()
+    body = target.read_text()
+    assert 'endpoint = "https://rtdm.sh"' in body

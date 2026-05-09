@@ -139,3 +139,71 @@ def test_load_config_accepts_valid_key(tmp_path, monkeypatch):
 
     cfg = load_config(p)
     assert cfg.remote.api_key == valid
+
+
+# ---------------------------------------------------------------------------
+# is_valid_endpoint + load-time enforcement (audit #2: cleartext bearer leak)
+# ---------------------------------------------------------------------------
+
+
+def test_https_endpoint_accepted(tmp_path, monkeypatch):
+    """An ordinary https:// endpoint loads cleanly."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "ok.toml"
+    p.write_text('mode = "remote"\n[remote]\nendpoint = "https://rtdm.sh"\n')
+    cfg = load_config(p)
+    assert cfg.remote.endpoint == "https://rtdm.sh"
+
+
+def test_http_endpoint_rejected_in_load(tmp_path, monkeypatch):
+    """A non-loopback http:// endpoint raises rather than ship a cleartext token."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "leaky.toml"
+    p.write_text('mode = "remote"\n[remote]\nendpoint = "http://rtdm.sh"\n')
+    with pytest.raises(ValueError, match="Invalid endpoint in config"):
+        load_config(p)
+
+
+def test_http_localhost_endpoint_accepted(tmp_path, monkeypatch):
+    """http://localhost:8000 is allowed for self-hosted dev."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    for url in (
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://[::1]:8000",
+    ):
+        p = tmp_path / "loop.toml"
+        p.write_text(f'mode = "remote"\n[remote]\nendpoint = "{url}"\n')
+        cfg = load_config(p)
+        assert cfg.remote.endpoint == url
+
+
+def test_endpoint_with_path_rejected(tmp_path, monkeypatch):
+    """A path-bearing endpoint would mangle the /v1/... join — refuse it."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "path.toml"
+    p.write_text('mode = "remote"\n[remote]\nendpoint = "https://rtdm.sh/api"\n')
+    with pytest.raises(ValueError, match="Invalid endpoint in config"):
+        load_config(p)
+
+
+def test_endpoint_with_query_rejected(tmp_path, monkeypatch):
+    """A ``?token=...`` baked into the endpoint would leak on every request."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "query.toml"
+    p.write_text(
+        'mode = "remote"\n[remote]\nendpoint = "https://rtdm.sh?token=leak"\n'
+    )
+    with pytest.raises(ValueError, match="Invalid endpoint in config"):
+        load_config(p)
+
+
+def test_endpoint_with_userinfo_rejected(tmp_path, monkeypatch):
+    """https://user:pass@host fights with Bearer auth — refuse."""
+    monkeypatch.delenv("RTDM_MODE", raising=False)
+    p = tmp_path / "userinfo.toml"
+    p.write_text(
+        'mode = "remote"\n[remote]\nendpoint = "https://u:p@rtdm.sh"\n'
+    )
+    with pytest.raises(ValueError, match="Invalid endpoint in config"):
+        load_config(p)

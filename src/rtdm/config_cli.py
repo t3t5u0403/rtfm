@@ -29,6 +29,7 @@ from rtdm.config import (
     DEFAULT_REMOTE_ENDPOINT,
     default_config_path,
     is_valid_api_key,
+    is_valid_endpoint,
     load_config,
 )
 
@@ -36,6 +37,11 @@ _MAX_KEY_ATTEMPTS = 3
 _KEY_FORMAT_ERROR = (
     "API key looks invalid. Expected format: "
     "rtdm_live_<32 alphanumeric/dash/underscore chars>. Try again."
+)
+_MAX_ENDPOINT_ATTEMPTS = 3
+_ENDPOINT_FORMAT_ERROR = (
+    "Endpoint looks invalid. Must be https://, or http:// with a "
+    "loopback host (localhost / 127.0.0.1 / ::1). Try again."
 )
 
 
@@ -134,7 +140,22 @@ def run_init() -> int:
                 file=sys.stderr,
             )
             return 1
-        endpoint = _ask("endpoint", DEFAULT_REMOTE_ENDPOINT)
+        # Endpoint validation mirrors the api_key flow: we re-prompt
+        # rather than persist a cleartext-http endpoint, which would
+        # silently leak the bearer token.  The default is always safe.
+        endpoint = ""
+        for _ in range(_MAX_ENDPOINT_ATTEMPTS):
+            candidate = _ask("endpoint", DEFAULT_REMOTE_ENDPOINT)
+            if is_valid_endpoint(candidate):
+                endpoint = candidate
+                break
+            print(_ENDPOINT_FORMAT_ERROR, file=sys.stderr)
+        else:
+            print(
+                "rtdm: too many invalid endpoint attempts; aborting.",
+                file=sys.stderr,
+            )
+            return 1
         ollama_url = DEFAULT_OLLAMA_URL
         model = DEFAULT_OLLAMA_MODEL
     else:

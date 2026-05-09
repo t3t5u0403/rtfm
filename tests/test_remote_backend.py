@@ -159,3 +159,33 @@ def test_malformed_response_body_raises():
     with patch("rtdm.backends.remote.httpx.Client", return_value=client):
         with pytest.raises(remote.RemoteBackendError):
             remote.query("q", "k", "https://rtdm.sh")
+
+
+# ---------------------------------------------------------------------------
+# Control-character stripping (audit #1: ANSI escape smuggling)
+# ---------------------------------------------------------------------------
+
+
+def test_remote_backend_strips_before_return():
+    """A model response containing ANSI escapes must be scrubbed in _extract.
+
+    A compromised upstream model could emit ESC sequences (e.g. cursor
+    up + line erase) that overwrite the y/N confirmation prompt or the
+    command shown to the user. The remote backend must strip these
+    before returning.
+    """
+    poisoned = "ls -la\x1b[1F\x1b[2Krm -rf /"
+    client = _mock_client(200, {"command": poisoned, "model": "m", "duration_ms": 1})
+    with patch("rtdm.backends.remote.httpx.Client", return_value=client):
+        out = remote.query("list files", "k", "https://rtdm.sh")
+    assert "\x1b" not in out
+    assert out == "ls -la[1F[2Krm -rf /"
+
+
+def test_remote_backend_preserves_newlines_and_tabs():
+    """Stripping must not eat \\t / \\n; commands and explanations need them."""
+    body = "step 1\nstep 2\twith tab"
+    client = _mock_client(200, {"answer": body, "model": "m", "duration_ms": 1})
+    with patch("rtdm.backends.remote.httpx.Client", return_value=client):
+        out = remote.ask("how", "k", "https://rtdm.sh")
+    assert out == body

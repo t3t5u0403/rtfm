@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import httpx
 
+from rtdm.backends import strip_control_chars
+
 
 class RemoteBackendError(Exception):
     """User-facing error from the remote backend.
@@ -130,4 +132,8 @@ def _extract(data: dict, key: str) -> str:
         raise RemoteBackendError(
             "Unexpected response shape from rtdm.sh. Try again or contact privacy@rtdm.sh."
         )
-    return value
+    # Scrub C0/C1 control characters before handing the string to the
+    # caller (which may print it or pass it to ``confirm_and_execute``).
+    # A compromised upstream model could otherwise smuggle ANSI escape
+    # sequences into the user's terminal.
+    return strip_control_chars(value)

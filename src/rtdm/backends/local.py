@@ -25,6 +25,7 @@ import json
 import sys
 from urllib.parse import urlparse
 
+from rtdm.backends import strip_control_chars
 from rtdm.config import LocalConfig
 
 SYSTEM_CMD = (
@@ -51,7 +52,13 @@ class LocalBackendError(Exception):
 
 
 def _stream_response(resp: http.client.HTTPResponse) -> str:
-    """Print tokens as they arrive; return the full concatenated string."""
+    """Print tokens as they arrive; return the full concatenated string.
+
+    Each token is scrubbed of C0/C1 control characters before being
+    written to stdout or accumulated, so a compromised model cannot
+    smuggle ANSI escape sequences into the user's terminal or the
+    command that gets handed to ``confirm_and_execute``.
+    """
     chunks: list[str] = []
     while True:
         line = resp.readline()
@@ -62,10 +69,11 @@ def _stream_response(resp: http.client.HTTPResponse) -> str:
             break
         tok = chunk.get("message", {}).get("content", "")
         if tok:
+            tok = strip_control_chars(tok)
             print(tok, end="", flush=True)
             chunks.append(tok)
     print()
-    return "".join(chunks)
+    return strip_control_chars("".join(chunks))
 
 
 def _chat(system_prompt: str, user_input: str, cfg: LocalConfig) -> str:

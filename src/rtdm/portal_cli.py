@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import webbrowser
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -20,6 +21,13 @@ from rtdm import config as config_module
 
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+
+# Allow-list of hostnames the portal endpoint is permitted to redirect us
+# to.  A startswith("https://") check would happily open
+# ``https://stripe.com.evil.example/`` if the server (or a downstream
+# response-rewriting proxy) ever returned one.  Stripe-managed billing
+# portals only ever live on billing.stripe.com, so pin to exactly that.
+_ALLOWED_PORTAL_HOSTS = frozenset({"billing.stripe.com"})
 
 
 def run() -> int:
@@ -83,8 +91,33 @@ def run() -> int:
         print("rtdm: unexpected response shape from rtdm.sh.", file=sys.stderr)
         return 1
 
-    if not isinstance(portal_url, str) or not portal_url.startswith("https://"):
-        print("rtdm: server returned a non-https portal URL; refusing to open.", file=sys.stderr)
+    if not isinstance(portal_url, str):
+        print("rtdm: server returned a non-string portal URL; refusing to open.", file=sys.stderr)
+        return 1
+
+    # Validate the redirect target against an allow-list of trusted
+    # hostnames.  Print the URL either way so the user can see what
+    # the server tried to send them to (useful for debugging /
+    # support), but refuse to launch the browser at anything off-list.
+    try:
+        parts = urlsplit(portal_url)
+    except ValueError:
+        parts = None
+
+    host = parts.hostname.lower() if parts and parts.hostname else None
+    if (
+        parts is None
+        or parts.scheme != "https"
+        or host not in _ALLOWED_PORTAL_HOSTS
+        or parts.username
+        or parts.password
+    ):
+        print(portal_url)
+        print(
+            "rtdm: server returned an unexpected portal host; refusing to open. "
+            "Visit the URL above only if you trust it, or contact privacy@rtdm.sh.",
+            file=sys.stderr,
+        )
         return 1
 
     # Print first so headless users always see the URL even if open()

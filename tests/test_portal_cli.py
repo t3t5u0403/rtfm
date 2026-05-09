@@ -131,12 +131,86 @@ def test_network_error(monkeypatch, capsys):
 
 
 def test_non_https_url_rejected(monkeypatch, capsys):
-    """A server-returned http:// URL must not be opened."""
+    """A server-returned http:// URL must not be opened (audit #3)."""
     monkeypatch.setattr(portal_cli.config_module, "load_config", lambda: _remote_cfg())
     resp = _mock_response(200, {"portal_url": "http://evil.example/x"})
     with _patch_client(resp), \
          patch("rtdm.portal_cli.webbrowser.open") as mock_open:
         rc = portal_cli.run()
     assert rc == 1
-    assert "https" in capsys.readouterr().err.lower()
+    assert "unexpected portal host" in capsys.readouterr().err.lower()
+    mock_open.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Audit #3: portal-host allow-list
+#
+# A pre-fix startswith("https://") check would happily open
+# ``https://stripe.com.evil.example/`` if a downstream proxy or
+# compromised /v1/auth/portal response ever returned one.  The fix pins
+# the redirect target to billing.stripe.com via a frozenset allow-list
+# and refuses everything else (still printing the URL so the user can
+# see what happened).
+# ---------------------------------------------------------------------------
+
+
+def test_portal_opens_billing_stripe_com(monkeypatch, capsys):
+    """The exact host billing.stripe.com is the only one we open."""
+    monkeypatch.setattr(portal_cli.config_module, "load_config", lambda: _remote_cfg())
+    portal_url = "https://billing.stripe.com/p/sess_real"
+    resp = _mock_response(200, {"portal_url": portal_url})
+    with _patch_client(resp), \
+         patch("rtdm.portal_cli.webbrowser.open") as mock_open:
+        rc = portal_cli.run()
+    assert rc == 0
+    mock_open.assert_called_once_with(portal_url, new=2)
+
+
+def test_portal_rejects_phishing_subdomain(monkeypatch, capsys):
+    """``https://stripe.com.evil.example/`` must not be opened.
+
+    A naive startswith("https://") or endswith("stripe.com") check would
+    let this through; the allow-list match on the parsed hostname
+    blocks it.
+    """
+    monkeypatch.setattr(portal_cli.config_module, "load_config", lambda: _remote_cfg())
+    phishing = "https://billing.stripe.com.evil.example/p/sess_phish"
+    resp = _mock_response(200, {"portal_url": phishing})
+    with _patch_client(resp), \
+         patch("rtdm.portal_cli.webbrowser.open") as mock_open:
+        rc = portal_cli.run()
+    assert rc == 1
+    out = capsys.readouterr()
+    # URL is printed for transparency, but the browser is not opened.
+    assert phishing in out.out
+    assert "unexpected portal host" in out.err.lower()
+    mock_open.assert_not_called()
+
+
+def test_portal_rejects_user_info_url(monkeypatch, capsys):
+    """A URL with embedded user-info (``https://x@billing.stripe.com/``)
+    is refused even though the trailing host is on the allow-list.
+
+    Embedded credentials are a classic phishing-display trick (the
+    ``x@`` part is invisible in some renderers and the user thinks the
+    real host is the prefix).
+    """
+    monkeypatch.setattr(portal_cli.config_module, "load_config", lambda: _remote_cfg())
+    sneaky = "https://attacker.example@billing.stripe.com/p/x"
+    resp = _mock_response(200, {"portal_url": sneaky})
+    with _patch_client(resp), \
+         patch("rtdm.portal_cli.webbrowser.open") as mock_open:
+        rc = portal_cli.run()
+    assert rc == 1
+    mock_open.assert_not_called()
+
+
+def test_portal_rejects_http_scheme(monkeypatch, capsys):
+    """Even ``http://billing.stripe.com/`` is refused — must be https."""
+    monkeypatch.setattr(portal_cli.config_module, "load_config", lambda: _remote_cfg())
+    resp = _mock_response(200, {"portal_url": "http://billing.stripe.com/p/x"})
+    with _patch_client(resp), \
+         patch("rtdm.portal_cli.webbrowser.open") as mock_open:
+        rc = portal_cli.run()
+    assert rc == 1
     mock_open.assert_not_called()
